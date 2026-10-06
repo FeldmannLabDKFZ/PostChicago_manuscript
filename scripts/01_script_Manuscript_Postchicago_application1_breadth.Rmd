@@ -1,0 +1,907 @@
+
+
+```{r setup package loading, warning=FALSE}
+library(PostChicago)
+library(RColorBrewer)
+library(GenomicRanges)
+```
+
+# Setup
+
+We analyse data from CapC11 (Mahara et al., Set2)
+Only 0h and 72h are taken to start with!
+
+```{r Directory structure}
+
+#workdir <- 'C:/Users/a590n/Nextcloud/OE0624 Projects/Manuscripts/2025 Postchicago/Original/2_resubmission Bioinformatics_orNARGAB/analysis/application2_breadth_v2/'
+workdir <- '..analysis/application1_breadth/'
+dir.create(workdir)
+setwd(workdir)
+
+designDir <- "designDir"
+outputDir <- "plots"
+dir.create(outputDir)
+
+chicagoOutputDir <- "results"
+
+intDir <- 'intervals'
+
+## Check if you have already stored the chicagoData tables:
+dir(chicagoOutputDir)
+```
+
+
+### Read in the design files
+
+```{r read baited_genes and rmapgr, warning=FALSE}
+baited_genes <- baitmap2baited_genes(designDir, save = FALSE)
+rmapgr <- rmap2rmapgr(designDir, save = FALSE)
+
+##annotated baits:
+baits_anno <- readRDS('designDir/baited_genes_expr_annotated.rds')
+
+##anno_CapC:
+capc_mahara <- read.csv('Mahara2024_SupplementaryTable2_CaptureC_results.csv',stringsAsFactors = FALSE)
+
+##induced, stable, etc genes:
+induced <- unique(capc_mahara[capc_mahara$genetype=='induced',]$genename)
+stablyactive <- unique(capc_mahara[capc_mahara$genetype=='stably_active',]$genename)
+repressed <- unique(capc_mahara[capc_mahara$genetype %in% c('repressed','downregulated'),]$genename)
+inactive <- unique(capc_mahara[capc_mahara$genetype %in% 'stably_inactive',]$genename)
+upregulated <- unique(capc_mahara[capc_mahara$genetype=='upregulated',]$genename)
+
+```
+
+### read in the datasets
+
+```{r Read chicagoData}
+dir(chicagoOutputDir)
+cdlist <- loadCdList(
+    resultsDir = chicagoOutputDir,
+    baited_genes = baited_genes
+)
+names(cdlist)
+
+pooledSamples <- cdlist[-grep("rep", names(cdlist))]
+replicateSamples <- cdlist[grep("rep", names(cdlist))]
+
+rm(cdlist)
+```
+
+# Basic statistics for Fig. S1
+
+```{r plotSigIntsStats, fig.width=9, fig.height=9,warning=FALSE, fig.align='center', fig.cap=paste0('Basic statistics of Capture-C data.')}
+
+##Keep only induced genes
+induced_genes=lapply(replicateSamples[c(1,2,13,14)],FUN=function(x) x[x$baitID %in% baited_genes[baited_genes$genename %in% induced]$re_id])
+plotStats(induced_genes, col = col, mode = 'log')
+
+```
+
+
+# Data integration
+
+## Create interactions table
+
+```{r Create Ints file, message=FALSE}
+ints <- makeIntsTable(pooledSamples[c(1,6)], baited_genes,
+    repscores = TRUE, LL = replicateSamples[c(1,2,13,14)],
+    ngroups = 1, outfolder = outputDir,overwrite = FALSE
+)
+```
+
+## Annotate with intervals
+
+```{r read in annotation intervals, warning=FALSE}
+dir(intDir)
+grl <- loadGrl(intDir = intDir)
+
+ints <- annotateInts(ints = ints, grl = grl)
+write.table(ints,'plots/ints_all.txt', sep='\t',eol='\n',quote=FALSE,row.names=FALSE)
+```
+
+##Further annotations of interactions into lost and gained
+
+```{r lineplotsWithInteractions, fig.width=8, fig.height=4, fig.cap= 'Visualization of significant interactions within lineplots. Significant interactions around Hoxb3 are shaded.'}
+
+## select interactions detected only at 0h, these are 'lost'
+lost <- ints[ints$RA_0h_score >= 5 & ints$RA_72h_score < 3 &
+               ints$RA_0h_rep3_score > ints$RA_72h_rep3_score &
+               ints$RA_0h_rep4_score > ints$RA_72h_rep4_score &
+               ints$RA_0h_N_downsampled >= ints$RA_72h_N_downsampled*1.5 &
+               ints$RA_0h_N.1_downsampled > ints$RA_72h_N.1_downsampled &
+               ints$RA_0h_N.2_downsampled > ints$RA_72h_N.2_downsampled, ]$intID
+
+## select interactions detected only at 72h, these are 'gained'
+gained <- ints[ints$RA_0h_score < 3 & ints$RA_72h_score >= 5 &
+               ints$RA_0h_rep3_score < ints$RA_72h_rep3_score &
+               ints$RA_0h_rep4_score < ints$RA_72h_rep4_score &
+               ints$RA_0h_N_downsampled*1.5 <= ints$RA_72h_N_downsampled &
+               ints$RA_0h_N.1_downsampled < ints$RA_72h_N.1_downsampled &
+               ints$RA_0h_N.2_downsampled < ints$RA_72h_N.2_downsampled, ]$intID
+
+## annotate the interaction table with interaction types:
+ints$clusters_refined <- "both"
+ints[ints$intID %in% lost, ]$clusters_refined <- "lost"
+ints[ints$intID %in% gained, ]$clusters_refined <- "gained"
+
+# ##Just once:
+write.table(ints,'plots/ints_all.txt', sep='\t',eol='\n',quote=FALSE,row.names=FALSE)
+```
+
+## Visualize significant interactions using Lineplots
+
+# Fig. 2A
+
+```{r}
+col <- palette.colors(3)[2:3]
+colintervals <- palette.colors(5)[4:5]
+
+#pdf('plots/Fig2_example_gainedLost.pdf')
+
+for (name in c('Hoxb3')){
+
+  id <- baited_genes[baited_genes$genename == name]$re_id
+  k <- 31
+  zoom <- 500000
+  ylim <- c(0, 200)
+  
+  par(mfrow = c(2, 2))
+  plotInteractions(pooledSamples[c(1,6)], id, k, zoom,
+      ylim = ylim, show.legend = FALSE,
+      show.legend.intervals = FALSE,
+      name = name, intervals = grl,
+      colintervals = colintervals,
+      rmapgr = rmapgr, col = col,
+      show.legend.outside = TRUE, d = ints,
+      cex.intervals = 1, colints = c('grey',rev(col))
+  )
+
+}
+
+#dev.off()
+```
+
+
+# Metaprofiles
+
+
+#############################################
+## 1. Matrices of K27ac/K27me3
+#############################################
+
+
+##Making oneGeneOnePeak tables
+
+```{r}
+quantfolder <- paste0(outputDir, "/oneGeneOnePeak_allChr")
+
+ogoplist <- makeOneGeneOnePeak(
+    grl = grl, rmapgr = rmapgr, 
+    ints = ints, folder = quantfolder
+)
+
+##look at the oneGeneOnePeak table:
+ogoplist[[1]][1:2,]
+
+##The tables are also saved in the quantfolder:
+list.files(path = quantfolder, pattern = "oneGeneOnePeak")
+```
+
+##Making matrices
+
+```{r examplesOneGeneOnePeak, fig.width=8, fig.height=4, fig.cap= 'Visualization of oneGeneOnePeak interactions. Interactions with H3K27me3 and H3K27ac are shaded.'}
+
+##Load Onegeneonepeak files:
+
+fls_ogop <- list.files(path = quantfolder, pattern = "oneGeneOnePeak")
+
+## H3K27me3 peaks:
+ogop_K27me3 <- read.delim(paste(quantfolder, 
+                                fls_ogop[grep("K27me3", fls_ogop)],sep = "/"), 
+                          stringsAsFactors = FALSE)
+ogop_K27me3$clusters_refined <- "K27me3_interaction"
+
+## H3K27ac peaks:
+ogop_K27ac <- read.delim(
+    paste(quantfolder, fls_ogop[grep("K27ac", fls_ogop)],sep = "/"), 
+    stringsAsFactors = FALSE
+)
+ogop_K27ac$clusters_refined <- "K27ac_interaction"
+
+############################
+## Create H3K27ac matrices
+############################
+
+name <- names(grl)[grep("K27ac", names(grl))]
+name
+
+## Zoom defines the +/- distance (in restriction fragments) around the intervals
+## for which the matrices will be created
+zoom <- 100
+
+## Folder in which the matrices will be stored:
+resfolder <- paste0(outputDir, "/matrices_allChr/")
+if (!file.exists(resfolder)) {
+    dir.create(resfolder)
+}
+
+## un-normalized matrix with reads
+m_reads <- getMatrix(pooledSamples,
+    zoom = zoom, d = ogop_K27ac, resfolder = resfolder, type = "reads",
+    norm = FALSE, name = name, rmapgr = rmapgr
+)
+
+## matrix normalized to the center of interactions
+## in sample 1 (as defined per normsam) with reads
+m_reads_norm <- getMatrix(pooledSamples,
+    zoom = zoom, d = ogop_K27ac, resfolder = resfolder, type = "reads",
+    norm = TRUE, name = name, rmapgr = rmapgr, normsam = 1
+)
+
+## matrix normalized to the center of interactions
+## in sample 2 (as defined per normsam) with reads
+m_reads_norm2 <- getMatrix(pooledSamples,
+    zoom = zoom, d = ogop_K27ac, resfolder = resfolder, type = "reads",
+    norm = TRUE, name = name, rmapgr = rmapgr, normsam = 2
+)
+
+
+############################
+## Create H3K27me3 matrices
+############################
+
+name <- names(grl)[grep("K27me3", names(grl))]
+name
+
+## Zoom defines the +/- distance (in restriction fragments) around the intervals
+## for which the matrices will be created
+zoom <- 100
+
+## Folder in which the matrices will be stored:
+resfolder <- paste0(outputDir, "/matrices_allChr/")
+if (!file.exists(resfolder)) {
+    dir.create(resfolder)
+}
+
+## un-normalized matrix with reads
+m_reads_me3 <- getMatrix(pooledSamples,
+    zoom = zoom, d = ogop_K27me3, resfolder = resfolder, type = "reads",
+    norm = FALSE, name = name, rmapgr = rmapgr
+)
+
+## matrix normalized to the center of interactions
+## in sample 1 (as defined per normsam) with reads
+m_reads_norm_me3 <- getMatrix(pooledSamples,
+    zoom = zoom, d = ogop_K27me3, resfolder = resfolder, type = "reads",
+    norm = TRUE, name = name, rmapgr = rmapgr, normsam = 1
+)
+
+## matrix normalized to the center of interactions
+## in sample 2 (as defined per normsam) with reads
+m_reads_norm2_me3 <- getMatrix(pooledSamples,
+    zoom = zoom, d = ogop_K27me3, resfolder = resfolder, type = "reads",
+    norm = TRUE, name = name, rmapgr = rmapgr, normsam = 2
+)
+
+
+```
+
+
+# Fig. 2E-G
+
+##Plot K27ac/K27me3 peaks overlapping lost ints:
+##Focussing on lost because gained K27me3-overlapping are so few!
+
+```{r}
+
+##Convenience function:
+
+strsplit_string <- function(x, s1=NULL, s2=NULL){
+##x: string or vector of strings
+##s1: a regular expression before the desired string
+##s2: a regular expression after the desired string
+  a=x
+  if (!is.null(s1)){
+    a=unlist(strsplit(a,split=s1))
+    a=a[1:length(a)%%2==0]
+  }
+  if (!is.null(s2)){
+    a=unlist(strsplit(a,split=s2))
+  }
+  return(a)
+}
+
+##########################################
+##STEP1: Extract all gained/lost ogops
+##########################################
+
+##Load ogop tables into a list ogops:
+
+quantfolder <- paste0(outputDir, "/oneGeneOnePeak_allChr")
+
+fls_ogop <- list.files(path = quantfolder, pattern = "oneGeneOnePeak",full.names = TRUE)
+ogops <- lapply(fls_ogop,FUN=function(x) read.delim(x,stringsAsFactors = FALSE))
+names(ogops)=strsplit_string(fls_ogop, s1='plots/oneGeneOnePeak_allChr/oneGeneOnePeak_',s2='.txt')
+
+####################################################
+#assign whether the interactions are lost
+####################################################
+
+for (i in 1:length(ogops)){
+  ogops[[i]]$lost=FALSE
+  #ogops[[i]]$gained=FALSE
+}
+
+##simply based on intIDs (normal interactions especially):
+
+for (i in 1:length(ogops)){
+  
+  a=ogops[[i]]
+  
+  if('TRUE' %in% (a$intID %in% lost)){
+     a[a$intID %in% lost,]$lost = TRUE
+  }
+  
+  ogops[[i]]=a
+}
+
+
+##Based on the overlap of the interacting epigenetic peak with a lost int:
+
+lostints=ints[ints$intID %in% lost,]
+#gainedints=ints[ints$intID %in% gained,]
+
+bed2gr <- function(bed){
+##converts a bed with 3 columns to a gr
+	gr=GRanges(bed[,1],IRanges(bed[,2],bed[,3]))
+	if (dim(bed)[2]>3){
+		names(gr)=bed[,4]
+	} 
+	if ('strand' %in% names(bed)){
+		strand(gr)=bed$strand
+	} else if ('Strand' %in% names(bed)){
+		strand(gr)=bed$Strand
+	}
+	return(gr)
+}
+
+cols=c('seqnames_otherEnd', 'start_otherEnd', 'end_otherEnd')
+ogops.mods=ogops ##keep only ogops with histone mods
+
+
+##annotate all lost interactions among ogops. 
+##Strategy:
+##If an interacting K27ac or K27me3 peak overlaps a lost/gained interaction, we annotate it as lost/gained
+
+for (id in unique(lostints$baitID)){
+  print(id)
+  b=lostints[lostints$baitID==id,]
+  boe=bed2gr(b[,cols])
+  og=lapply(ogops.mods, FUN=function(x) x[x$baitID==id,])
+  ogoe=lapply(og, FUN=function(y) if(nrow(y)>0 && nrow(as.matrix(findOverlaps(boe, bed2gr(y[,grep('peaks',names(y))][,2:4]))))>0){
+    ##get row names with lost interactions:
+    rownames(y[unique(as.matrix(findOverlaps(boe, bed2gr(y[,grep('peaks',names(y))][,2:4])))[,2]),])
+  })
+  
+  ##add info on lost interactions to the respective ogops:
+  for(i in 1:length(ogoe)){
+    if(!is.null(ogoe[[i]])){
+      ogops.mods[[i]][ rownames(ogops.mods[[i]]) %in% ogoe[[i]] ,]$lost = TRUE
+    }
+  }
+}
+
+
+################################################
+##save files:
+################################################
+
+ogops=ogops.mods
+for(i in 1:length(ogops)){
+  write.table(ogops[[i]], paste0(fls_ogop[[i]],'_annotated..txt') , sep='\t',eol='\n', quote=FALSE)
+}
+
+#################################################
+##STEP2: Plots based on the annotated ogop files
+#################################################
+
+quantfolder <- paste0(outputDir, "/oneGeneOnePeak_allChr")
+
+fls_ogop <- list.files(path = quantfolder, pattern = "oneGeneOnePeak",full.names = TRUE)
+fls_ogop <- fls_ogop[grep('annotated..txt',fls_ogop)]
+ogops <- lapply(fls_ogop,FUN=function(x) read.delim(x,stringsAsFactors = FALSE))
+names(ogops)=strsplit_string(fls_ogop, s1="plots/oneGeneOnePeak_allChr/oneGeneOnePeak_",s2='.txt_annotated..txt')
+
+##select ids for lost interactions:
+lostac <- ogops[[grep('K27ac',names(ogops))]][ogops[[grep('K27ac',names(ogops))]]$lost,]
+lostac <- paste(lostac$baitID,lostac$summit_re_id,sep=';')
+
+lostk <- ogops[[grep('K27me',names(ogops))]][ogops[[grep('K27me',names(ogops))]]$lost,]
+lostk <- paste(lostk$baitID,lostk$summit_re_id,sep=';')
+
+length(lostac)
+# [1] 141
+
+###################################
+##Fig. 2E-F
+###################################
+
+colaggr <- rep(col[c(1,3,4,5,6,2)], 2)
+lty <- rep(c(1, 3), each = 6)
+k=5
+xlim=100
+
+par(mfcol = c(2, 3))
+  
+gt <- 'lost'
+
+##select based on interaction type
+ids <- lostac
+ac <- lapply(m_reads_norm, FUN=function(y) y[rownames(y) %in% ids,])
+
+plotAggregatePeaks(ac,
+    plotwhat = "median", k = k, xlim = c(-xlim, xlim),
+    mainprefix = paste(gt, "ints K27ac\n"), ylab = "reads norm to RA0h",
+    col = colaggr, lty = lty
+)
+
+##select based on interaction type
+ids <- lostk
+me <- lapply(m_reads_norm_me3, FUN=function(y) y[rownames(y) %in% ids,])
+
+plotAggregatePeaks(me,
+    plotwhat = "median", k = k, xlim = c(-xlim, xlim),
+    mainprefix = paste(gt, "ints K27me3\n"), ylab = "reads norm to RA0h",
+    col = colaggr, lty = lty
+)
+
+
+########################################################
+##STEP3: Normalisation to compare peak width and shape
+##QC for gainedac/lostac/lostk to compare their breadth!
+########################################################
+
+length(lostac)
+# [1] 141
+length(lostk)
+# [1] 525
+
+###################################
+##Fig. 2G
+###################################
+
+colall <- palette.colors(7)[2:7]
+colaggr <- rep(colall, 2)
+lty <- rep(c(1, 3), each = 6)
+
+col <- palette.colors(7)[2:3]
+
+k=5
+xlim=100
+
+ylim=c(0,0.8)
+
+par(mfcol = c(2, 3))
+
+##A) Reads:
+gt <- 'lost'
+
+##select based on interaction type
+ids <- lostac
+ac <- lapply(m_reads_norm, FUN=function(y) y[rownames(y) %in% ids,])
+
+plotAggregatePeaks(ac,
+    plotwhat = "median", k = k, xlim = c(-xlim, xlim),
+    mainprefix = paste(gt, "ints K27ac\n"), ylab = "reads norm to RA0h",
+    col = colaggr, lty = lty
+)
+
+##Background normalization:
+##Substract control signal:
+
+acnorm_loss=ac[c(1,6)]
+for(i in 1:nrow(ac[[1]])){
+  acnorm_loss[[1]][i,]=ac[[1]][i,]-ac[[7]][i,]
+  acnorm_loss[[2]][i,]=ac[[6]][i,]-ac[[12]][i,]
+}
+
+plotAggregatePeaks(acnorm_loss,
+    plotwhat = "median", k = k, xlim = c(-xlim, xlim),
+    mainprefix = paste(gt, "ints K27ac\n"), ylab = "reads norm to RA0h - con",
+    col = col, lty = lty, ylim=ylim
+)
+
+
+##3) Lost interactions K27me3:
+
+##select based on interaction type
+ids <- lostk
+me <- lapply(m_reads_norm_me3, FUN=function(y) y[rownames(y) %in% ids,])
+
+plotAggregatePeaks(me,
+    plotwhat = "median", k = k, xlim = c(-xlim, xlim),
+    mainprefix = paste(gt, "ints K27me3\n"), ylab = "reads norm to RA0h",
+    col = colaggr, lty = lty
+)
+
+##Background normalization:
+##Substract control signal:
+
+menorm_loss=me[c(1,6)]
+for(i in 1:nrow(me[[1]])){
+  menorm_loss[[1]][i,]=me[[1]][i,]-me[[7]][i,]
+  menorm_loss[[2]][i,]=me[[6]][i,]-me[[12]][i,]
+}
+
+plotAggregatePeaks(menorm_loss,
+    plotwhat = "median", k = k, xlim = c(-xlim, xlim),
+    mainprefix = paste(gt, "ints K27me3\n"), ylab = "reads norm to RA0h - con",
+    col = col, lty = lty, ylim=ylim
+)
+    
+    
+##Plot deltas of the signal  
+    
+delta_acnorm_loss=acnorm_loss[[1]]
+delta_menorm_loss=menorm_loss[[1]]
+
+for(i in 1:nrow(acnorm_loss[[1]])){
+  delta_acnorm_loss[i,]=acnorm_loss[[2]][i,]-acnorm_loss[[1]][i,]
+}
+
+for(i in 1:nrow(menorm_loss[[1]])){
+  delta_menorm_loss[i,]=menorm_loss[[2]][i,]-menorm_loss[[1]][i,]
+}
+
+deltalist = list(K27ac_loss=delta_acnorm_loss,
+                 K27me3_loss=delta_menorm_loss)
+
+##This is Figure 2G:
+plotAggregatePeaks(deltalist,
+    plotwhat = "median", k = k, 
+    mainprefix = 'Delta RA72h.vs.RA.0h \n', ylab = "con-normalized deltas RA72h-RA0h"
+    ,ylim=c(-0.5, 0)
+)
+abline(h=0,lty=2)
+    
+```
+
+
+####################################################
+##Gained/lost interactions!
+####################################################
+
+####################################################
+##Now we will make aggregate profiles of all our 
+##significant interactions
+##those that are lost or gained only!
+####################################################
+
+```{r}
+
+quantfolder <- paste(outputDir,'oneGeneOnePeak',sep='/')
+
+colnames <- c('intID',  'baitID', 'otherEndID', 'seqnames_bait', 'start_bait', 'end_bait', 'seqnames_otherEnd', 'start_otherEnd', 'end_otherEnd')
+ogop_all <- ints[,colnames]
+ogop_all$summit_re_id=ogop_all$otherEndID
+row.names(ogop_all)=ogop_all$intID
+write.table(ogop_all,paste0(outputDir,'/oneGeneOnePeak_allChr/oneGeneOnePeak_allInts.txt'),
+            sep='\t', eol='\n', quote=FALSE, row.names=TRUE)
+
+##only gained/lost ints!
+ogop_all <- ogop_all[ogop_all$intID %in% c(lost,gained),]
+dim(ogop_all)
+dim(ints)
+write.table(ogop_all,paste0(outputDir,'/oneGeneOnePeak_allChr/oneGeneOnePeak_allLostGainedInts.txt'),
+            sep='\t', eol='\n', quote=FALSE, row.names=TRUE)
+
+```
+
+
+##Matrices surrounding ALL lost/gained interactions:
+
+```{r CreateInteractionMatrices, message=FALSE, warning=FALSE}
+#name <- 'allInts'
+name <- 'allLostGainedInts'
+name
+
+## Zoom defines the +/- distance (in restriction fragments) around the intervals
+## for which the matrices will be created
+zoom <- 100
+d = ogop_all
+
+## Folder in which the matrices will be stored:
+resfolder <- paste0(outputDir, "/matrices_allChr/")
+if (!file.exists(resfolder)) {
+    dir.create(resfolder)
+}
+
+## un-normalized matrix with reads
+m_reads <- getMatrix(pooledSamples,
+    zoom = zoom, d = d, resfolder = resfolder, type = "reads",
+    norm = FALSE, name = name, rmapgr = rmapgr
+)
+
+## matrix normalized to the center of interactions
+## in sample 1 (as defined per normsam) with reads
+m_reads_norm <- getMatrix(pooledSamples,
+    zoom = zoom, d = d, resfolder = resfolder, type = "reads",
+    norm = TRUE, name = name, rmapgr = rmapgr, normsam = 1
+)
+
+## matrix normalized to the center of interactions
+## in sample 2 (as defined per normsam) with reads
+m_reads_norm2 <- getMatrix(pooledSamples,
+    zoom = zoom, d = d, resfolder = resfolder, type = "reads",
+    norm = TRUE, name = name, rmapgr = rmapgr, normsam = 2
+)
+
+## matrix normalized to the center of interactions
+## in sample 6 (RA72h) (as defined per normsam) with reads
+m_reads_norm3 <- getMatrix(pooledSamples,
+    zoom = zoom, d = d, resfolder = resfolder, type = "reads",
+    norm = TRUE, name = name, rmapgr = rmapgr, normsam = 6
+)
+
+```
+
+##Plot aggregate profiles of only those interactions that are lost/gained and not associated with K27me3
+##Compare them to all lost-gained interactions:
+
+#Fig. 2B-D, 2H, and S1C-D
+
+```{r}
+
+###################################################################
+###################################################################
+###################################################################
+##Function for width comparison over lost/gained ints interactions
+###################################################################
+###################################################################
+###################################################################
+
+compareWidths <- function(type, lostnone, gainednone){
+  ##type: what is the type of interactionstaht we compre? Will be in the title!
+  ##lostnone: intIDs of lost interactions to consider
+  ##gainednone: intIDs of gained interactions to be considered
+
+  col <- palette.colors(7)[2:7]
+  col <- col[c(1,3,4,5,6,2)]
+  colaggr=rep(col,2)
+  
+  par(mfcol=c(2,3))
+  
+  ##############################
+  ##Gained interactions, no K27me3
+  ##############################
+  
+  gt <- paste('gained', type)
+  
+  ids=gainednone
+  
+  m.gained=lapply(m_reads_norm3, FUN=function(y) y[sapply(as.character(row.names(y)), FUN=function(x) x[1]) %in% ids,])
+  
+  plotAggregatePeaks(m.gained,
+      plotwhat = "median", k = 3, xlim = c(-50, 50),
+      mainprefix = paste0(gt, " norm to 72h\n"), ylab = "reads_norm",
+      col = colaggr, lty = lty
+  )
+  
+  ##Background normalization:
+  ##Substract control signal:
+      
+  m.gained.norm=m.gained[c(1,6)]
+  for(i in 1:nrow(m.gained[[1]])){
+    m.gained.norm[[1]][i,]=m.gained[[1]][i,]-m.gained[[7]][i,]
+    m.gained.norm[[2]][i,]=m.gained[[6]][i,]-m.gained[[12]][i,]
+  }
+  
+  plotAggregatePeaks(m.gained.norm,
+      plotwhat = "median", k = k, xlim = c(-xlim, xlim),
+      mainprefix = paste(gt, "bg norm\n"), ylab = "reads norm to RA72h - con",
+      col = col, lty = lty, ylim=ylim
+  )
+  
+  
+  ##############################
+  ##Lost interactions, no K27me3
+  ##############################
+  
+  gt <- paste ('lost', type)
+  
+  ids=lostnone
+  
+  m.lost=lapply(m_reads_norm, FUN=function(y) y[sapply(as.character(row.names(y)), FUN=function(x) x[1]) %in% ids,])
+  
+  plotAggregatePeaks(m.lost,
+      plotwhat = "median", k = 3, xlim = c(-50, 50),
+      mainprefix = paste0(gt," norm to 0h\n"), ylab = "reads_norm",
+      col = colaggr, lty = lty
+  )
+  
+  ##Background normalization:
+  ##Substract control signal:
+      
+  m.lost.norm=m.lost[c(1,6)]
+  for(i in 1:nrow(m.lost[[1]])){
+    m.lost.norm[[1]][i,]=m.lost[[1]][i,]-m.lost[[7]][i,]
+    m.lost.norm[[2]][i,]=m.lost[[6]][i,]-m.lost[[12]][i,]
+  }
+  
+  plotAggregatePeaks(m.lost.norm,
+      plotwhat = "median", k = k, xlim = c(-xlim, xlim),
+      mainprefix = paste(gt, "bg norm\n"), ylab = "reads norm to RA0h - con",
+      col = col, lty = lty, ylim=ylim
+  )
+  
+  ###################################
+  ##Calculate and plot deltas
+  ###################################
+  
+  delta_gain=m.gained.norm[[1]]
+  delta_loss=m.lost.norm[[1]]
+     
+  for(i in 1:nrow(m.gained.norm[[1]])){
+    delta_gain[i,]=m.gained.norm[[2]][i,]-m.gained.norm[[1]][i,]
+  }
+  
+  for(i in 1:nrow(m.lost.norm[[1]])){
+    delta_loss[i,]=m.lost.norm[[2]][i,]-m.lost.norm[[1]][i,]
+  }
+  
+  deltalist = list(delta_gain,
+                   delta_loss)
+  names(deltalist) = paste(c('gained', 'lost'), type,sep='_')
+  
+  ##plot deltas
+  plotAggregatePeaks(deltalist,
+      plotwhat = "median", k = k, 
+      mainprefix = 'Delta RA72h.vs.RA.0h', ylab = "con-normalized deltas RA72h-RA0h"
+      ,ylim=c(-0.35, 0.35)
+  )
+  abline(h=0,lty=2)
+  
+  ##########################
+  ##flip loss for comparison
+  ##########################
+  
+  deltalist[[grep('lost',names(deltalist))]] = -deltalist[[grep('lost',names(deltalist))]]
+  
+  ##plot flipped deltas
+  plotAggregatePeaks(deltalist,
+      plotwhat = "median", k = 5, 
+      mainprefix = 'Flipped Delta RA72h.vs.RA.0h \n', ylab = "con-normalized deltas RA72h-RA0h"
+      ,ylim=c(0, 0.45)
+  )
+
+}
+
+
+##Run the function
+
+type <- 'noK27me3'
+lostnone <- lost[lost%in%ints[ints$K27me3_peaks_otherEnd==FALSE ,]$intID]
+gainednone <- gained[gained%in%ints[ints$K27me3_peaks_otherEnd==FALSE ,]$intID]
+
+length(lostnone)
+#[1] 1687
+length(gainednone)
+#[1] 923
+compareWidths(type,lostnone,gainednone)
+
+
+type <- 'all'
+length(lost)
+# [1] 3609
+length(gained)
+# [1] 934
+compareWidths(type,lost,gained)
+
+```
+
+
+##Distance seems to be an issue - let's normalize the distances!
+
+#Fig. S1B
+
+```{r}
+
+#pdf('plots/Metaprofiles_LostGained_peaks_stratifiedByDistances.pdf',width=8,height=24)
+
+lostints <- ints[ints$clusters_refined=='lost',]
+gainedints <- ints[ints$clusters_refined=='gained',]
+
+lowers <- c(1,250,500,750,1000,2000)
+uppers <- c(250,500,750,1000,2000,10000)
+df=data.frame(lowers,uppers)
+
+  k=5
+  xlim=100
+  
+  ylim=c(0,1)
+  
+  par(mfrow = c(3, 2))
+
+
+for (j in 1:nrow(df)){
+  
+  lower=df[j,1]
+  upper=df[j,2]
+  
+  lost.sel=lostints[abs(lostints$start_bait-lostints$start_otherEnd)>=lower*1000 &
+                     abs(lostints$start_bait-lostints$start_otherEnd)< upper*1000, ]$intID
+  gained.sel=gainedints[abs(gainedints$start_bait-gainedints$start_otherEnd)>=lower*1000 &
+                     abs(gainedints$start_bait-gainedints$start_otherEnd)< upper*1000, ]$intID
+
+##########################################
+##Plot gained and lost next to each other,
+##include background normalisation:
+##########################################
+
+  
+
+    ##1) Gained interactions:
+  
+    gt <- paste('gained,', lower, '-',upper,'kb')
+  
+    ##select based on interaction type
+    ids <- gained.sel
+    ac <- lapply(m_reads_norm3, FUN=function(y) y[rownames(y) %in% ids,])
+  
+    plotAggregatePeaks(ac,
+        plotwhat = "median", k = k, xlim = c(-xlim, xlim),
+        mainprefix = paste(gt, "ints \n"), ylab = "reads norm to RA72h",
+        col = colaggr, lty = lty, ylim=ylim
+    )
+    
+    ##2) Lost interactions:
+  
+    gt <- paste('lost,', lower, '-',upper,'kb')
+  
+    ##select based on interaction type
+    ids <- lost.sel
+    ac <- lapply(m_reads_norm, FUN=function(y) y[rownames(y) %in% ids,])
+  
+    plotAggregatePeaks(ac,
+        plotwhat = "median", k = k, xlim = c(-xlim, xlim),
+        mainprefix = paste(gt, "ints \n"), ylab = "reads norm to RA0h",
+        col = colaggr, lty = lty, ylim=ylim
+    )
+    
+}
+
+```
+
+
+##Distance distributions lost/gained (Fig. S1A)
+
+```{r}
+
+ints$Distance.kb=abs(apply(ints[,c('start_bait','end_bait')],1,FUN='mean')-
+                       apply(ints[,c('start_otherEnd','end_otherEnd')],1,FUN='mean'))/1000
+                       
+ints[ints$seqnames_bait!=ints$seqnames_otherEnd,]$Distance.kb = as.numeric(NA)
+
+par(mfrow=c(1,1))
+
+plot(density(log10(ints[ints$seqnames_bait==ints$seqnames_otherEnd & ints$clusters_refined=='gained',]$Distance.kb)),
+     col='cornflowerblue',
+     lwd=2,
+     main='Distance distribution different interaction types',
+     xlab='Distance bait-otherEnd log10([kb])')
+lines(density(log10(ints[ints$seqnames_bait==ints$seqnames_otherEnd & ints$clusters_refined=='lost',]$Distance.kb)),col='orange',lwd=2)
+lines(density(log10(ints[ints$seqnames_bait==ints$seqnames_otherEnd,]$Distance.kb)),col='lightgrey',lwd=2)
+#abline(v=2.87,lty=3,col='cornflowerblue')
+abline(v=2.9,lty=3,col='grey')
+#abline(v=2.93,lty=3,col='orange')
+abline(v=2.6,lty=3,col='cornflowerblue')
+abline(v=2.45,lty=3,col='grey')
+abline(v=4.45,lty=3,col='orange')
+text(2.6,1.1,pos=2,labels=paste0(round(10^2.6,1),'kb'),col='cornflowerblue')
+text(2.45,0.75,pos=2,labels=paste0(round(10^2.45,1),'kb'),col='grey')
+text(2.9,1.5,pos=4,labels=paste0(round(10^2.9,1),'kb'),col='cornflowerblue')
+text(4.45,0.4,pos=2,labels=paste0(round(10^4.45,1),'kb'),col='orange')
+legend('topleft', legend=c('all','gained','lost'), lwd=2, col=c('lightgrey','cornflowerblue', 'orange'),bty='n',cex=0.75)
+
+```

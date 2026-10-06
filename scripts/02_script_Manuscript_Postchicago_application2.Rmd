@@ -1,0 +1,75 @@
+
+# Setup
+
+```{r setup package loading, warning=FALSE}
+library(PostChicago)
+library(RColorBrewer)
+library(GenomicRanges)
+
+# workdir <- 'C:/Users/a590n/Nextcloud/OE0624 Projects/Members/Angelika/bioinfo/analysis/CaptureC/MyData/CapC26_MasterCourse_test/'
+
+workdir <- 'C:/Users/a590n/Nextcloud/OE0624 Projects/Manuscripts/2025 Postchicago/Original/2_resubmission Bioinformatics_orNARGAB/analysis/application1_QC/'
+
+#workdir <- 'C:/Users/a590n/Nextcloud/OE0624 Projects/Manuscripts/2025 Postchicago/Original/2_resubmission Bioinformatics_orNARGAB/analysis/application2_breadth_v2/'
+workdir <- '../analysis/application2_QC/'
+dir.create(workdir)
+setwd(workdir)
+
+designDir <- "designDir"
+outputDir <- "postchicago"
+dir.create(outputDir)
+
+chicagoOutputDir <- "results"
+
+## Check if you have already stored the chicagoData tables:
+dir(chicagoOutputDir)
+```
+
+# Read in the datasets
+
+```{r read baited_genes and rmapgr, warning=FALSE}
+baited_genes <- baitmap2baited_genes(designDir, save = FALSE)
+rmapgr <- rmap2rmapgr(designDir, save = FALSE)
+```
+
+# Read in the chicagodata objects
+
+```{r Read chicagoData}
+dir(chicagoOutputDir)
+cdlist <- loadCdList(
+    resultsDir = chicagoOutputDir,
+    baited_genes = baited_genes
+)
+names(cdlist)
+
+pooledSamples <- cdlist
+
+##sort based on sample number
+pooledSamples <- pooledSamples[order(as.numeric(sapply(strsplit(names(pooledSamples),split='-s'),FUN=function(x) x[length(x)])))]
+
+```
+
+# Basic statistics for Fig. 2C-K
+
+```{r plotSigIntsStats, fig.width=9, fig.height=9,warning=FALSE, fig.align='center', fig.cap=paste0('Basic statistics of Capture-C data.')}
+plotStats(pooledSamples,col=c('black','grey','red'))
+```
+
+# Lineplots for Fig. 2B
+
+```{r plotInteractionsSimple, fig.width=5, fig.height=4, fig.small=TRUE, fig.cap='Capture-C signal +/- 200kb around the Hoxb3 TSS.'}
+
+col <- c('black','grey','red')
+
+name='Arl4c'
+id <- baited_genes[baited_genes$genename == name]$re_id
+
+ylim <- c(0, 150)
+k <- 25
+
+plotInteractions(pooledSamples, id, k,
+    ylim = ylim, show.legend = FALSE, name = name,
+    rmapgr = rmapgr, col = col
+)
+
+```
